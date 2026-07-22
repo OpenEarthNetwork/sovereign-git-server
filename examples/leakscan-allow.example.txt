@@ -1,0 +1,38 @@
+# =====================================================================
+# leakscan-allow.example.txt  --  attribution ALLOW-TERMS list (template, OPTIONAL)
+# =====================================================================
+# Copy this to `.leakscan-allow.txt` if you need it. It lists attribution phrases that are
+# INTENTIONALLY public. This is a SECONDARY convenience; the primary review mechanism is the
+# allowed-LINES list (see leakscan-allow-lines.example.txt).
+#
+#   cp examples/leakscan-allow.example.txt .leakscan-allow.txt
+#
+# HOW IT WORKS (per-term subsumption -> REVIEW, never silent):
+#   An allow phrase A exempts a deny match on term T ONLY IF A SUBSUMES T -- i.e. A CONTAINS T as
+#   a substring. Such a match is NOT silently dropped: it is surfaced as an INFERRED-ATTRIBUTION
+#   item that BLOCKS (exit 3) until a human reviews it (interactive y/n, or --ack-review). Answer
+#   `y` and the exact line is appended to your allowed-LINES file so it passes silently next time.
+#
+#   Crucially, A only covers the SPECIFIC term it contains: allow "Copyright 2026 Acme Inc" covers
+#   deny "Acme Inc", but it does NOT cover a co-located DIFFERENT deny term such as
+#   "git.internal.acme.example" on the same line -- that stays a hard leak. (This per-term rule is
+#   the fix for the old blanket "any allow phrase on the line drops the whole line" bug.)
+#
+# USE THE NARROWEST PHRASE THAT SIGNALS THE CONTEXT -- not a bare word. Empty file = every deny
+# match with no subsuming allow is a hard leak. That is a fine, strict default.
+# ---------------------------------------------------------------------
+
+# --- Your own attribution (public by design) ----------------------------------
+# The copyright/author/maintainer lines you DO publish.
+#   Copyright 2026 Acme Inc
+#   Maintained by the Acme Open Source team
+
+# --- Public product domains / repo URLs ---------------------------------------
+# Public-facing URLs you want in docs (as opposed to internal infra hosts).
+#   github.com/AcmeOSS
+#   https://acme.example/docs
+
+# --- Public handles you intend to show ----------------------------------------
+# A public support handle or org login that also appears in your deny list as a
+# broader term.
+#   support@acme.example

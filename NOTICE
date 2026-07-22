@@ -1,0 +1,12 @@
+IAS Sovereign Git Server
+Copyright 2026 VakeWorks AB
+
+Authored by Raazesh Sainudiin and an \|/ias/|\ Commons Continuum in the
+Open Earth Network, with development funding from VakeWorks AB.
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Portions orchestrate third-party open-source software that is separately
+licensed and NOT distributed here (installed at deploy time on infrastructure
+you control): Forgejo (GPL-3.0-or-later), git, OpenSSH, GnuPG, curl, Caddy.
+Their licenses govern their own use.

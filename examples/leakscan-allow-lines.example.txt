@@ -1,0 +1,34 @@
+# =====================================================================
+# leakscan-allow-lines.example.txt  --  vetted ALLOWED-LINES list (template, OPTIONAL)
+# =====================================================================
+# Copy this to `.leakscan-allow-lines.txt` (next to your scan target or CWD), or pass it with
+# `--allow-lines-file`. This is the PRIMARY review mechanism.
+#
+#   cp examples/leakscan-allow-lines.example.txt .leakscan-allow-lines.txt
+#
+# HOW IT WORKS:
+#   Each non-comment, non-blank line here is an EXACT, human-vetted FULL line. When the scanner
+#   finds a deny-term match on a line whose content EQUALS one of these vetted lines, that line
+#   PASSES SILENTLY -- reviewed once, remembered. Matching is WHOLE-LINE (case-sensitive,
+#   trailing-whitespace-trimmed).
+#
+# WHY WHOLE-LINE (and not a substring allow):
+#   A whole-line match cannot be fooled by a broad allow substring overlapping a DIFFERENT
+#   confidential substring on the same line. Vetting the exact line "Copyright 2026 Acme Inc"
+#   exempts ONLY that line; a different line that merely also contains a deny term is still a leak.
+#   This is the fix for the co-located-substring class of gate bypass.
+#
+# HOW LINES GET HERE:
+#   - You add them by hand after reviewing a scan's flagged output, OR
+#   - The interactive review appends them for you: run the scan in a terminal, and for each
+#     inferred-attribution item answer `y` (genuine attribution) -- the tool appends that exact
+#     line here (with a `# vetted <date> by <user>` comment) so the next scan is silent.
+#
+# NOTE: this list SILENTLY passes matched lines, so keep it exact and minimal. A hard leak is never
+# bypassable interactively; to permanently allow a non-attribution line, add its exact text here
+# deliberately, after human review.
+# ---------------------------------------------------------------------
+
+# --- Example: your own copyright/citation lines (public by design) ------------
+#   Copyright 2026 Acme Inc
+#   author: "Acme Open Source Team"

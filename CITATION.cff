@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: 'If you use IAS Sovereign Git Server in academic or professional work, please cite it as below.'
+title: 'IAS Sovereign Git Server'
+version: '0.1.0'
+license: Apache-2.0
+repository-code: 'https://github.com/OpenEarthNetwork/sovereign-git-server'
+url: 'https://openearth.network/'
+authors:
+  - family-names: Sainudiin
+    given-names: Raazesh
+    affiliation: 'VakeWorks AB'
+    # initiator, in the Open Earth Network
+  - name: 'an \|/ias/|\ Commons Continuum'
+    # attribution per the IAS co-authorship model. Legal copyright is held by
+    # VakeWorks AB (see LICENSE + NOTICE), which funds the work.
+abstract: >
+  A reusable toolkit for running a self-hosted, sovereign git server (Forgejo)
+  with disciplined, dogfooded workflows: own-and-mirror, contribute-back relay,
+  follow-copy upstream mirroring, and controlled declassified release; with
+  SHA-verified mirroring, GPG/sha256-verified server updates, encrypted backups,
+  and a fail-closed confidentiality leak-gate. Initiated by Raazesh Sainudiin in
+  the Open Earth Network, with development funding from VakeWorks AB.
+keywords:
+  - sovereign-git
+  - digital-sovereignty
+  - forgejo
+  - git-mirroring
+  - self-hosting
+  - supply-chain-verification
+preferred-citation:
+  type: software
+  title: 'IAS Sovereign Git Server'
+  authors:
+    - family-names: Sainudiin
+      given-names: Raazesh
+      affiliation: 'VakeWorks AB'
+    - name: 'an \|/ias/|\ Commons Continuum'
+  version: '0.1.0'
+  license: Apache-2.0
+  url: 'https://github.com/OpenEarthNetwork/sovereign-git-server'

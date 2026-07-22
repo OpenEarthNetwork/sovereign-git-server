@@ -1,0 +1,61 @@
+# =====================================================================
+# leakscan-deny.example.txt  --  YOUR confidentiality DENY list (template)
+# =====================================================================
+# Copy this to `.leakscan-deny.txt`, delete the examples, and add the strings
+# that must NEVER appear in a public release of YOUR repository.
+#
+#   cp examples/leakscan-deny.example.txt .leakscan-deny.txt
+#   $EDITOR .leakscan-deny.txt
+#   ias-git-leakscan.sh ./your-repo
+#
+# FORMAT:
+#   - One term per line.
+#   - Matching is case-INSENSITIVE substring (so "acme" matches "ACME", "Acme Inc").
+#   - Blank lines and everything after a '#' are ignored (so you can comment freely).
+#   - A term is flagged everywhere in the scanned tree; if a specific line is
+#     intentionally public (e.g. your own org in a LICENSE), add that phrase to
+#     your .leakscan-allow.txt instead of removing the deny term.
+#
+# There are NO built-in terms -- an empty file means the gate checks nothing.
+# The categories below are PROMPTS. Replace every example with your own values.
+# ---------------------------------------------------------------------
+
+# --- Your organisation / internal identifiers ---------------------------------
+# Internal-only company or project names, internal team names, codenames.
+#   AcmeInternal
+#   Project-Bluebird
+
+# --- Infrastructure: hosts, domains, IPs --------------------------------------
+# Internal hostnames, private domains, server FQDNs, fixed IP addresses,
+# machine fingerprints. (Public product domains you WANT to show -> allow-file.)
+#   git.internal.acme.example
+#   10.0.0.0
+#   vpn.acme.example
+
+# --- People: employees, operators, contacts ----------------------------------
+# Staff names and personal logins/emails that should not ride into public code.
+# (Your INTENDED public author/maintainer name -> put it in .leakscan-allow.txt.)
+#   jane.doe
+#   jdoe@acme.example
+
+# --- Clients / counterparties / partners --------------------------------------
+# Names of customers, clients, or partners under NDA or simply not-yours-to-name.
+#   BigBankClient
+#   client-acme-corp
+
+# --- Credentials & secret markers ---------------------------------------------
+# Token/secret prefixes or unique strings that betray a real credential leaked
+# into a file. (This is a coarse net; use a dedicated secret-scanner too.)
+#   AKIA
+#   ghp_
+#   -----BEGIN OPENSSH PRIVATE KEY-----
+#   xoxb-
+
+# --- Internal paths / repo structure ------------------------------------------
+# Private monorepo paths or internal directory conventions that reveal structure.
+#   /home/youruser/
+#   internal-monorepo/
+
+# --- Internal tooling / framework names ---------------------------------------
+# In-house framework, process, or convention names not meant for the public.
+#   OurSecretFramework
