@@ -72,9 +72,22 @@ allow-lines file (Step 1) and re-run. If it is a real secret, you must scrub or 
 
 ## Step 4 — publish + mirror + verify (only after review + approval)
 Declassify staged; publishing is a separate, deliberate act:
-1. Push the staged repo to your public canonical `git.example.org/your-org/<repo>`.
-2. Mirror OUT: `bin/ias-git-mirror-setup.sh` (one-time per repo) then `bin/ias-git-mirror-sync.sh`.
-3. **Verify**: `bin/ias-git-verify.sh` — each mirror's SHA must equal the canonical's.
+1. Push the staged repo to your public canonical `git.example.org/your-org/<repo>` (SSH; fast-forward —
+   an incremental release is a child commit, so it never needs `--force`).
+2. **Mirror OUT (push-mirror, W1).** `bin/ias-git-mirror-setup.sh` (one-time per repo) configures Forgejo
+   to push-mirror the canonical OUT to GitHub + GitLab + Codeberg; after that they sync on Forgejo's own
+   interval. To force an **immediate** sync **and** prove every endpoint matches, run:
+   ```
+   GITVW_API=https://git.example.org/api/v1 \
+   bin/ias-git-protect-mirrors.sh <github owner/repo> <gitlab group/path> <codeberg owner/repo> verify
+   ```
+   (tokens via env: `GITHUB_TOKEN`, `GITLAB_TOKEN`, `CODEBERG_TOKEN`, `GITVW_FORGEJO_TOKEN` — never on argv).
+   It POSTs `push_mirrors-sync`, waits for the async push, then compares the canonical + all 3 mirror SHAs.
+   > Note: `ias-git-mirror-sync.sh` is for the **pull**-mirror case (W3, following a repo you do not own) —
+   > it is NOT the tool for pushing your own repo out. Use `ias-git-protect-mirrors.sh … verify` here.
+3. **Verify** (standalone, no tokens): `bin/ias-git-verify.sh <canonical> <mirror>` — `git ls-remote` both
+   and diff; each mirror's `main` SHA must equal the canonical's. (Step 2's `verify` already does this
+   4-way; this is the independent re-check.)
 4. Record the release (SHA + date) in your linkage ledger so the public copy is never lost.
 
 ---
