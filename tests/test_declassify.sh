@@ -250,6 +250,106 @@ grep -q "|| rc=\$?" "$TOOL"                    && ok "T8d rc capture is -e-safe 
 grep -q -- "--ack-review" "$TOOL"              && ok "T8e forwards --ack-review"                       || bad "T8e --ack-review forwarding missing"
 grep -q -- "--allow-lines-file" "$TOOL"        && ok "T8f forwards --allow-lines-file"                 || bad "T8f --allow-lines-file forwarding missing"
 
+# ------------------------------------------------------------
+# T9: --method incremental -- child-commit release model (no force-push).
+#   first release (no --onto) -> 1 commit on main; second release --onto it ->
+#   2 commits with parent = first tip, tree updated + deletions captured; a
+#   re-run with no source change is idempotent; a dropped file never appears in
+#   ANY commit across the accumulated history (leak-safe chain).
+# ------------------------------------------------------------
+echo "-- T9: --method incremental (child-commit release model) --"
+ISRC="$WORK/inc-src"; mkdir -p "$ISRC/docs"
+printf 'v1\n' > "$ISRC/README.md"
+printf 'keep\n' > "$ISRC/docs/keep.md"
+printf '%s\n' "$SECRET_TERM" > "$ISRC/secret.txt"
+( cd "$ISRC" && git init -q && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm i ) >/dev/null 2>&1
+I1="$WORK/inc-rel1"
+if bash "$TOOL" "$ISRC" "$I1" --allow 'README.md' --allow 'docs' --method incremental --name t >/dev/null 2>&1; then
+  [ "$(git -C "$I1" rev-list --count HEAD)" = "1" ] && ok "T9a first incremental release = 1 commit" || bad "T9a expected 1 commit"
+  [ "$(git -C "$I1" branch --show-current)" = "main" ] && ok "T9b on main" || bad "T9b not on main"
+  [ -e "$I1/secret.txt" ] && bad "T9c secret.txt leaked" || ok "T9c non-allowlisted file excluded"
+else
+  bad "T9a first incremental release failed"
+fi
+printf 'v2\n' > "$ISRC/README.md"; printf 'new\n' > "$ISRC/docs/new.md"; rm -f "$ISRC/docs/keep.md"
+( cd "$ISRC" && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm v2 ) >/dev/null 2>&1
+I2="$WORK/inc-rel2"
+if bash "$TOOL" "$ISRC" "$I2" --allow 'README.md' --allow 'docs' --method incremental --onto "$I1" --name t >/dev/null 2>&1; then
+  [ "$(git -C "$I2" rev-list --count HEAD)" = "2" ] && ok "T9d second release = 2 commits (history preserved)" || bad "T9d expected 2 commits"
+  [ "$(git -C "$I2" rev-parse HEAD^)" = "$(git -C "$I1" rev-parse HEAD)" ] && ok "T9e parent = prior tip (fast-forwardable)" || bad "T9e parent linkage wrong"
+  grep -q 'v2' "$I2/README.md" && ok "T9f tree updated" || bad "T9f tree not updated"
+  [ -e "$I2/docs/new.md" ] && ok "T9g addition captured" || bad "T9g addition missing"
+  [ -e "$I2/docs/keep.md" ] && bad "T9h deletion NOT captured" || ok "T9h deletion captured"
+else
+  bad "T9d second incremental release failed"
+fi
+I3="$WORK/inc-rel3"
+bash "$TOOL" "$ISRC" "$I3" --allow 'README.md' --allow 'docs' --method incremental --onto "$I2" --name t >/dev/null 2>&1
+[ "$(git -C "$I3" rev-list --count HEAD)" = "2" ] && ok "T9i idempotent re-run adds no commit" || bad "T9i idempotent re-run made a commit"
+if git -C "$I2" log --all --pretty=format: --name-only 2>/dev/null | grep -q 'secret.txt'; then
+  bad "T9j dropped file present in accumulated history (LEAK)"
+else
+  ok "T9j dropped file never in accumulated history (leak-safe chain)"
+fi
+
+# ------------------------------------------------------------
+# T10 (AF-INCR-1 / AF-INCR-3, red-team fixes): incremental must (a) re-scan INHERITED history so a
+# past-gate-miss is caught by the next release, and (b) DIE on an unreachable --onto (never silently
+# fresh-root). Uses a generic-mode bundle copy (parent has no monorepo scanners -> adopter deny-file).
+# ------------------------------------------------------------
+echo "-- T10 (AF-INCR-1/3): incremental history-integrity + unreachable --onto --"
+GBIN="$WORK/gbundle/bin"; mkdir -p "$GBIN"
+cp "$SG/bin/ias-git-declassify.sh" "$SG/bin/ias-git-scrub-provenance.sh" "$SG/bin/ias-git-leakscan.sh" "$GBIN/" 2>/dev/null
+GDECL="$GBIN/ias-git-declassify.sh"
+TSRC="$WORK/t10-src"; mkdir -p "$TSRC"
+printf 'hello\n' > "$TSRC/README.md"
+printf 'SECRETVALUE_ZZZ\n' > "$TSRC/oops.md"
+( cd "$TSRC" && git init -q && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm i ) >/dev/null 2>&1
+: > "$WORK/deny-empty.txt"
+printf 'SECRETVALUE_ZZZ\n' > "$WORK/deny-secret.txt"
+if bash "$GDECL" "$TSRC" "$WORK/t10r1" --allow 'README.md' --allow 'oops.md' --method incremental --leak-deny-file "$WORK/deny-empty.txt" --name t >/dev/null 2>&1; then
+  ok "T10a first release passes empty adopter gate (secret slips, as in the red-team)"
+else
+  bad "T10a first release unexpectedly failed"
+fi
+if bash "$GDECL" "$TSRC" "$WORK/t10r2" --allow 'README.md' --method incremental --onto "$WORK/t10r1" --leak-deny-file "$WORK/deny-secret.txt" --name t >"$WORK/t10r2.log" 2>&1; then
+  bad "T10b AF-INCR-1: inherited leak NOT caught (incremental update passed with a secret in history)"
+else
+  grep -q 'AF-INCR-1' "$WORK/t10r2.log" && ok "T10b AF-INCR-1: inherited-history leak caught (4d fail-closed)" || bad "T10b failed but not via 4d"
+fi
+if bash "$GDECL" "$TSRC" "$WORK/t10r3" --allow 'README.md' --method incremental --onto "$WORK/nope-repo.git" --leak-deny-file "$WORK/deny-empty.txt" --name t >"$WORK/t10r3.log" 2>&1; then
+  bad "T10c AF-INCR-3: unreachable --onto did NOT die (silent fresh-root)"
+else
+  grep -qi 'UNREACHABLE' "$WORK/t10r3.log" && ok "T10c AF-INCR-3: unreachable --onto dies with a clear error" || bad "T10c died but without the UNREACHABLE signal"
+fi
+
+# ------------------------------------------------------------
+# T11 (AF-INCR-1b, red-team): a secret in an `export-ignore`d path must STILL be caught in inherited
+# history. `git archive` (the old 4d extractor) HONORS export-ignore -> it dropped such a file from the
+# scan tree while it stayed in the published commit objects (false PASS). The fixed 4d materialises via
+# read-tree + checkout-index (no attribute filtering) -> the inherited secret is seen and blocks r2.
+# ------------------------------------------------------------
+echo "-- T11 (AF-INCR-1b): export-ignored inherited secret must still be caught --"
+TSRC2="$WORK/t11-src"; mkdir -p "$TSRC2"
+printf 'hello\n' > "$TSRC2/README.md"
+printf 'SECRETVALUE_EXPIGN\n' > "$TSRC2/secret.md"
+printf 'secret.md export-ignore\n' > "$TSRC2/.gitattributes"
+( cd "$TSRC2" && git init -q && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm i ) >/dev/null 2>&1
+printf 'SECRETVALUE_EXPIGN\n' > "$WORK/deny-expign.txt"
+# r1: publish INCLUDING the secret + its export-ignore attribute, empty gate (secret slips, as in red-team)
+if bash "$GDECL" "$TSRC2" "$WORK/t11r1" --allow 'README.md' --allow 'secret.md' --allow '.gitattributes' --method incremental --leak-deny-file "$WORK/deny-empty.txt" --name t >/dev/null 2>&1; then
+  ok "T11a first release publishes an export-ignored secret (empty gate)"
+else
+  bad "T11a first release unexpectedly failed"
+fi
+# r2: --onto r1, drop the secret from the NEW tree + deny the token. Old git-archive extractor would
+# skip secret.md (export-ignore) -> false PASS; fixed checkout-index extractor catches it.
+if bash "$GDECL" "$TSRC2" "$WORK/t11r2" --allow 'README.md' --allow '.gitattributes' --method incremental --onto "$WORK/t11r1" --leak-deny-file "$WORK/deny-expign.txt" --name t >"$WORK/t11r2.log" 2>&1; then
+  bad "T11b AF-INCR-1b: export-ignored inherited secret NOT caught (git-archive bypass regressed)"
+else
+  grep -q 'AF-INCR-1' "$WORK/t11r2.log" && ok "T11b AF-INCR-1b: export-ignored inherited secret caught (checkout-index extractor)" || bad "T11b failed but not via 4d"
+fi
+
 echo ""
 echo "== RESULT: ${PASS} passed, ${FAIL} failed =="
 [ "$FAIL" -eq 0 ] || exit 1

@@ -35,6 +35,19 @@
 #   --method squash   (DEFAULT) build the allowlisted tree, then `git init` a
 #                     fresh repo + ONE commit. History-safe by construction:
 #                     no .git is copied from the source, so zero inherited history.
+#                     NOTE: re-running squash makes an UNRELATED root -> updating a
+#                     published canonical needs a force-push (history REPLACE). For
+#                     ongoing releases of a PUBLIC repo, prefer --method incremental.
+#   --method incremental  build the allowlisted+scrubbed tree, then commit it ON TOP
+#                     of the prior published tip (given by --onto) as a CHILD commit.
+#                     No force-push: cloners just `git pull`. History-safe the same
+#                     way squash is -- the private .git is NEVER cloned; the published
+#                     history is only ever a chain of scrubbed public trees. Idempotent:
+#                     an unchanged tree produces NO new commit. First release (no --onto
+#                     or an empty/unreachable one) behaves like squash's first commit.
+#   --onto <url|path> (incremental only) the prior PUBLISHED canonical to build on
+#                     (e.g. ssh://git@git.example.org/Org/repo.git). Its full history is
+#                     cloned, the new release committed on top, and the result fast-forwards.
 #   --method filter   use git-filter-repo to keep ONLY the --allow paths across
 #                     the FULL history. Requires git-filter-repo on PATH; errors
 #                     out telling you to use squash if it is missing.
@@ -125,6 +138,7 @@ say() { echo "== $* =="; }
 SRC=""
 STAGING=""
 METHOD="squash"
+ONTO=""             # --method incremental: prior published canonical (url/path) to commit ON TOP OF
 PUB_NAME=""
 DO_RECORD=0
 ALLOW_UNSCANNED=0   # F1: explicit operator override to proceed past unscanned-type files
@@ -144,8 +158,10 @@ while [ $# -gt 0 ]; do
     --deny=*) DENY+=("${1#*=}"); shift ;;
     --deny-term) [ $# -ge 2 ] || die "--deny-term needs a value"; DENY_TERMS+=("$2"); shift 2 ;;
     --deny-term=*) DENY_TERMS+=("${1#*=}"); shift ;;
-    --method) [ $# -ge 2 ] || die "--method needs squash|filter"; METHOD="$2"; shift 2 ;;
+    --method) [ $# -ge 2 ] || die "--method needs squash|incremental|filter"; METHOD="$2"; shift 2 ;;
     --method=*) METHOD="${1#*=}"; shift ;;
+    --onto) [ $# -ge 2 ] || die "--onto needs a repo url/path"; ONTO="$2"; shift 2 ;;
+    --onto=*) ONTO="${1#*=}"; shift ;;
     --name) [ $# -ge 2 ] || die "--name needs a value"; PUB_NAME="$2"; shift 2 ;;
     --name=*) PUB_NAME="${1#*=}"; shift ;;
     --leak-deny-file) [ $# -ge 2 ] || die "--leak-deny-file needs a path"; LEAK_DENY_FILE="$2"; shift 2 ;;
@@ -167,8 +183,8 @@ SRC="${POSN[0]}"
 STAGING="${POSN[1]}"
 
 case "$METHOD" in
-  squash|filter) : ;;
-  *) die "--method must be 'squash' or 'filter', got '${METHOD}'" ;;
+  squash|incremental|filter) : ;;
+  *) die "--method must be 'squash', 'incremental', or 'filter', got '${METHOD}'" ;;
 esac
 
 # ALLOWLIST IS MANDATORY -- never default to publishing everything.
@@ -340,6 +356,63 @@ if [ "$METHOD" = "squash" ]; then
   git -C "$STAGING" branch -m main
   SNAP_SHA="$(git -C "$STAGING" rev-parse HEAD)"
   echo "  fresh single-commit repo built. snapshot HEAD=${SNAP_SHA}"
+elif [ "$METHOD" = "incremental" ]; then
+  say "STEP 3/5 HISTORY-SAFE = incremental (commit ON TOP of prior published tip; NO force-push)"
+  # 1. BASE: if --onto is a reachable repo WITH commits, clone its full public history; else fresh init.
+  #    We NEVER clone the private source's .git -> the published history stays a chain of clean public
+  #    trees only (leak-safety identical to squash, preserved across releases).
+  # AF-INCR-3 (red-team): distinguish an UNREACHABLE --onto (typo/network/auth) from a genuinely-empty
+  # reachable one by ls-remote's EXIT CODE, NOT by empty output. A silent fall-through to a fresh root
+  # would break append-only and force a later force-push -- the exact thing this model eliminates.
+  ONTO_OK=0
+  if [ -n "$ONTO" ]; then
+    # `if cmd; then` neutralizes `set -e` so a failed ls-remote does NOT abort before we classify it.
+    if ONTO_LS="$(git ls-remote "$ONTO" 2>"$TMPD/onto-ls.err")"; then ONTO_RC=0; else ONTO_RC=$?; fi
+    if [ "$ONTO_RC" -ne 0 ]; then
+      cat "$TMPD/onto-ls.err" >&2
+      die "--onto '$ONTO' is UNREACHABLE (ls-remote exit $ONTO_RC). Fix the URL/network/auth, or OMIT --onto for a first release. Refusing to silently create a fresh root (would break append-only + force a later force-push)."
+    fi
+    [ -n "$ONTO_LS" ] && ONTO_OK=1   # reachable AND non-empty -> build on it
+  fi
+  if [ "$ONTO_OK" -eq 1 ]; then
+    git clone --quiet "$ONTO" "$STAGING" 2> "$TMPD/onto.err" \
+      || { cat "$TMPD/onto.err" >&2; fail "clone --onto failed: $ONTO"; }
+    git -C "$STAGING" checkout -q main 2>/dev/null \
+      || git -C "$STAGING" checkout -q -B main
+    echo "  based on --onto (prior history preserved): $ONTO"
+  else
+    git -C "$STAGING" -c init.defaultBranch=main init --quiet
+    git -C "$STAGING" symbolic-ref HEAD refs/heads/main 2>/dev/null || true
+    [ -n "$ONTO" ] && echo "  --onto '$ONTO' is reachable but EMPTY -> FIRST release (fresh init on main)" \
+                   || echo "  no --onto -> FIRST release (fresh init on main)"
+  fi
+  # 2. REPLACE the working tree with the freshly selected allowlist (captures adds/mods/DELETES).
+  #    Remove every top-level entry except .git, then copy the selected files in.
+  find "$STAGING" -mindepth 1 -maxdepth 1 -not -name '.git' -exec rm -rf {} +
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    dest="$STAGING/$rel"; mkdir -p "$(dirname "$dest")"; cp -a "$SRC_ROOT/$rel" "$dest"
+  done < "$SELECTED_LIST"
+  # 3. SCRUB provenance BEFORE the commit (same guarantee as squash).
+  if [ -f "$SCRUB_TOOL" ]; then
+    bash "$SCRUB_TOOL" "$STAGING" || fail "provenance scrub failed"
+  else
+    echo "  WARN: scrub tool missing ($SCRUB_TOOL); relying on leak-gate only" >&2
+  fi
+  # 4. COMMIT ON TOP (idempotent: no change -> no new commit).
+  # AF-INCR-2 (red-team): --force so an allowlisted .gitignore cannot silently drop another allowlisted
+  # path from the release -- the ALLOWLIST, not .gitignore, defines the published tree.
+  git -C "$STAGING" -c user.name="declassify" -c user.email="declassify@localhost" add -A --force
+  if git -C "$STAGING" diff --cached --quiet 2>/dev/null && git -C "$STAGING" rev-parse HEAD >/dev/null 2>&1; then
+    SNAP_SHA="$(git -C "$STAGING" rev-parse HEAD)"
+    echo "  no change vs prior release -> NO new commit (idempotent). HEAD=${SNAP_SHA}"
+  else
+    git -C "$STAGING" -c user.name="declassify" -c user.email="declassify@localhost" \
+      commit --quiet -m "Declassified release snapshot" \
+      || fail "incremental commit failed (nothing staged?)"
+    SNAP_SHA="$(git -C "$STAGING" rev-parse HEAD)"
+    echo "  incremental commit added. HEAD=${SNAP_SHA}  total-commits=$(git -C "$STAGING" rev-list --count HEAD)"
+  fi
 else
   say "STEP 3/5 HISTORY-SAFE = filter (git-filter-repo over allowlist)"
   if ! command -v git-filter-repo >/dev/null 2>&1; then
@@ -557,6 +630,65 @@ else
     head -20 "$HIST_HITS" | sed 's/^/       /' >&2
   else
     echo "     PASS (no --deny-term secret in any history object)"
+  fi
+fi
+
+# 4d (AF-INCR-1, red-team): --method incremental INHERITS full history via --onto. Steps 4a/4b (or the
+# generic scanner) scanned only HEAD's tree -- but a secret that slipped a PAST release's gate (a
+# denylist-coverage gap or gate-miss AT THAT TIME) would persist in an OLDER commit forever, invisible
+# to later releases. So re-scan EVERY inherited commit's TREE with the SAME allowlist-aware gate (NOT a
+# raw denylist grep -- that would false-flag permitted brand attribution). Fail-closed on any hit.
+if [ "$METHOD" = "incremental" ]; then
+  echo "  4d (AF-INCR-1): full-history integrity -- re-scan every inherited commit tree with the gate"
+  HEAD_SHA="$(git -C "$STAGING" rev-parse HEAD 2>/dev/null || echo "")"
+  hist_bad=0; nscanned=0
+  # AF-INCR-5 (red-team): scan `rev-list --all`, NOT just HEAD. `git clone --onto` brings ALL refs
+  # (refs/heads + refs/tags + refs/remotes) into $STAGING; a secret reachable only from a non-main
+  # inherited ref would escape a HEAD-only walk. --all is the conservative published-superset (a
+  # leak gate must fail-closed toward over-scanning, not under-scanning).
+  for c in $(git -C "$STAGING" rev-list --all 2>/dev/null); do
+    [ "$c" = "$HEAD_SHA" ] && continue   # HEAD's tree == working tree, already covered by 4a/4b
+    ctree="$TMPD/histtree"; rm -rf "$ctree"; mkdir -p "$ctree"
+    # AF-INCR-1b (red-team): materialise the commit tree with read-tree + checkout-index, NOT `git archive`.
+    # `git archive` HONORS .gitattributes `export-ignore`, so an export-ignored path is dropped from the
+    # scan tree while STAYING in the published commit objects (proven leak bypass). read-tree + checkout-index
+    # writes the exact tree bytes with NO attribute filtering (--worktree-attributes does not help archive).
+    histidx="$TMPD/histidx"; rm -f "$histidx"
+    if ! GIT_INDEX_FILE="$histidx" git -C "$STAGING" read-tree "$c" 2>/dev/null \
+       || ! GIT_INDEX_FILE="$histidx" git -C "$STAGING" checkout-index -a -f --prefix="$ctree/" 2>/dev/null; then
+      # AF-INCR-1c (red-team): FAIL-CLOSED -- an inherited commit we cannot materialise must BLOCK the
+      # release, never ship unscanned (was fail-open `WARN...continue`).
+      hist_bad=1; echo "     FAIL: could not materialise commit $c for scan (fail-closed)" >&2
+      rm -f "$histidx"; rm -rf "$ctree"; continue
+    fi
+    rm -f "$histidx"
+    nscanned=$((nscanned+1))
+    if [ "$LEAKGATE_MODE" = "internal" ]; then
+      crc=0
+      CONF_NONINTERACTIVE=1 bash "$CONF_TOOL" "${CONF_ARGS[@]}" "$ctree" > "$TMPD/hc.out" 2>&1 || crc=$?
+      if [ "$crc" -ne 0 ]; then hist_bad=1; echo "     FAIL: commit $c tree fails confidentiality gate (exit $crc)" >&2; head -6 "$TMPD/hc.out" | sed 's/^/       /' >&2; fi
+      if ! python3 "$LEAK_TOOL" "$ctree" > "$TMPD/hl.out" 2>&1; then
+        lrc=$?
+        if [ "$lrc" -ne 2 ]; then hist_bad=1; echo "     FAIL: commit $c tree fails internal-leak gate (exit $lrc)" >&2; head -6 "$TMPD/hl.out" | sed 's/^/       /' >&2; fi
+      fi
+    else
+      HLS_ARGS=("$ctree")
+      [ -n "$LEAK_DENY_FILE" ] && HLS_ARGS+=(--deny-file "$LEAK_DENY_FILE")
+      [ -n "$LEAK_ALLOW_LINES_FILE" ] && HLS_ARGS+=(--allow-lines-file "$LEAK_ALLOW_LINES_FILE")
+      [ "$ACK_REVIEW" -eq 1 ] && HLS_ARGS+=(--ack-review)
+      lsrc=0
+      LEAKSCAN_NONINTERACTIVE=1 bash "$LEAKSCAN_TOOL" "${HLS_ARGS[@]}" > "$TMPD/hls.out" 2>&1 || lsrc=$?
+      if [ "$lsrc" -ne 0 ]; then hist_bad=1; echo "     FAIL: commit $c tree fails generic leak-gate (exit $lsrc)" >&2; head -6 "$TMPD/hls.out" | sed 's/^/       /' >&2; fi
+    fi
+    rm -rf "$ctree"
+  done
+  if [ "$hist_bad" -eq 1 ]; then
+    GATE_OK=0
+    echo "     FAIL (AF-INCR-1): a leak persists in INHERITED history -- an older release commit is dirty" >&2
+    echo "     under the current gate. Remediate: re-baseline with --method squash (drops history to a" >&2
+    echo "     fresh clean root), or scrub the offending commit(s), before publishing this update." >&2
+  else
+    echo "     PASS (all ${nscanned} inherited commit tree(s) clean under the current gate)"
   fi
 fi
 

@@ -144,3 +144,24 @@ nothing is published until an explicit go.
 | Clean repo, someone else owns it | **W3** -- follow-copy + PR upstream |
 | **Layered repo (L1+L2+L3), we own it, want a public release** | **W4** -- declassify -> public canonical -> then W1 from there |
 | A contribution comes back on a mirror | **W2** -- relay to the (public) canonical |
+
+---
+
+## Updating an existing release -- `--method incremental` (no force-push)
+
+The first release uses `--method squash` (or `incremental` with no `--onto`): a single clean commit.
+For every SUBSEQUENT release, use **`--method incremental --onto <prior-canonical>`** so the new
+release is a **child commit** of the prior published tip -- not a fresh unrelated root:
+
+```
+ias-git-declassify.sh <src> <staging> --allow '<globs>' --method incremental \
+    --onto ssh://git@<your-forge>/<Org>/<repo>.git
+```
+
+It clones the prior published canonical (full public history), rebuilds the tree from the current
+`--allow` selection + scrub, and commits on top. The push then **fast-forwards** (never `--force`), so
+anyone who cloned or forked just `git pull`s -- their history is never rewritten. It is **idempotent**
+(an unchanged tree produces no commit). Leak-safety is identical to squash and preserved across the
+chain: the private `.git` is never cloned, so the published history is only ever a sequence of scrubbed
+public trees. Avoid re-`squash`ing an already-published repo -- that makes an unrelated root and forces
+a history-rewriting push.
